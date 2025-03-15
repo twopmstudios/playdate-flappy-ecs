@@ -304,8 +304,25 @@ function drawBird()
         local bird = _G.birdForDrawing
         gfx.setColor(gfx.kColorBlack)
         
-        -- Draw at the stored position
+        -- Draw bird body
         gfx.fillCircleAtPoint(bird.x, bird.y, 12)
+        
+        -- Draw beak
+        gfx.fillTriangle(
+            bird.x + 8, bird.y - 2, 
+            bird.x + 16, bird.y, 
+            bird.x + 8, bird.y + 2
+        )
+        
+        -- Draw eye
+        gfx.setColor(gfx.kColorWhite)
+        gfx.fillCircleAtPoint(bird.x + 4, bird.y - 3, 3)
+        gfx.setColor(gfx.kColorBlack)
+        gfx.fillCircleAtPoint(bird.x + 5, bird.y - 3, 1)
+        
+        -- Draw wing
+        gfx.drawLine(bird.x - 6, bird.y + 2, bird.x - 10, bird.y + 8)
+        gfx.drawLine(bird.x - 10, bird.y + 8, bird.x, bird.y + 6)
     end
 end
 
