@@ -380,8 +380,13 @@ function drawPipes()
     if _G.pipesForDrawing and _G.gameStateForDrawing == "playing" then
         gfx.setColor(gfx.kColorBlack)
         
+        -- Count active pipes
+        local pipeCount = 0
+        
         -- Draw all pipes
         for id, pipe in pairs(_G.pipesForDrawing) do
+            pipeCount = pipeCount + 1
+            
             -- Top pipe
             local topHeight = pipe.gapY - pipe.gap/2
             gfx.fillRect(pipe.x - pipe.width/2, 0, pipe.width, topHeight)
@@ -390,12 +395,21 @@ function drawPipes()
             local bottomY = pipe.gapY + pipe.gap/2
             gfx.fillRect(pipe.x - pipe.width/2, bottomY, pipe.width, SCREEN_HEIGHT - bottomY)
         end
+        
+        -- Debug pipe count
+        gfx.drawText("Pipes: " .. pipeCount, 300, 5)
     end
 end
 
 function PipeComponent:onRemove()
     self.topPipe:remove()
     self.bottomPipe:remove()
+    
+    -- Also remove from the drawing table when the pipe is removed
+    if _G.pipesForDrawing and _G.pipesForDrawing[self.actor.id] then
+        _G.pipesForDrawing[self.actor.id] = nil
+        print("Removed pipe from drawing: " .. self.actor.id)
+    end
 end
 
 class('ScoreComponent').extends(Component)
@@ -594,12 +608,12 @@ function drawUI()
         gfx.setLineWidth(1)
         
         -- Game title
-        gfx.drawTextAligned("FLAPPY DATE", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 40, gfx.kTextAlignCenter)
+        gfx.drawText("FLAPPY DATE", SCREEN_WIDTH/2 - 40, SCREEN_HEIGHT/2 - 40)
         
         -- Instructions
-        gfx.drawTextAligned("Press A to start", SCREEN_WIDTH/2, SCREEN_HEIGHT/2, gfx.kTextAlignCenter)
-        gfx.drawTextAligned("Press A to flap wings", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 20, gfx.kTextAlignCenter)
-        gfx.drawTextAligned("Avoid pipes", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 40, gfx.kTextAlignCenter)
+        gfx.drawText("Press A to start", SCREEN_WIDTH/2 - 50, SCREEN_HEIGHT/2)
+        gfx.drawText("Press A to flap wings", SCREEN_WIDTH/2 - 65, SCREEN_HEIGHT/2 + 20)
+        gfx.drawText("Avoid pipes", SCREEN_WIDTH/2 - 35, SCREEN_HEIGHT/2 + 40)
         
     elseif gameState == "gameOver" then
         -- Draw game over screen
@@ -609,9 +623,9 @@ function drawUI()
         gfx.setLineWidth(1)
         
         -- Game over text
-        gfx.drawTextAligned("GAME OVER", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 40, gfx.kTextAlignCenter)
-        gfx.drawTextAligned("Final Score: " .. score, SCREEN_WIDTH/2, SCREEN_HEIGHT/2, gfx.kTextAlignCenter)
-        gfx.drawTextAligned("Press A to restart", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 40, gfx.kTextAlignCenter)
+        gfx.drawText("GAME OVER", SCREEN_WIDTH/2 - 35, SCREEN_HEIGHT/2 - 40)
+        gfx.drawText("Final Score: " .. score, SCREEN_WIDTH/2 - 45, SCREEN_HEIGHT/2)
+        gfx.drawText("Press A to restart", SCREEN_WIDTH/2 - 55, SCREEN_HEIGHT/2 + 40)
     end
 end
 
@@ -662,19 +676,33 @@ function startGame()
     -- Explicitly set the game state
     _G.gameStateForDrawing = "playing"
     
-    -- Reset pipes for drawing
+    -- Force full cleanup of graphics state
+    gfx.sprite.removeAll() -- Remove ALL sprites from the system
+    gfx.sprite.redrawBackground()
+    
+    -- Completely reset drawing state
+    _G.pipesForDrawing = nil
+    _G.birdForDrawing = nil
+    collectgarbage("collect")  -- Force full garbage collection
     _G.pipesForDrawing = {}
     
-    -- Clear existing actors with certain tags
-    for _, actor in pairs(gameWorld.actors) do
-        if actor:hasTag("bird") or actor:hasTag("pipe") then
-            gameWorld:removeActor(actor)
-        end
+    -- Stop any existing game activity
+    gameWorld:stop()
+    if pipeSpawnSystem then
+        pipeSpawnSystem:stopSpawning()
     end
     
+    -- Clear all actors from the world and recreate essential ones
+    gameWorld.actors = {}
+    print("Cleared all actors")
+    
     -- Reset score
-    scoreTracker:getComponent(ScoreComponent).score = 0
     _G.scoreForDrawing = 0
+    
+    -- Create a new score tracker
+    scoreTracker = Actor()
+    scoreTracker:addComponent(ScoreComponent)
+    gameWorld:addActor(scoreTracker)
     print("Score reset to 0")
     
     -- Create bird with a more distinct bird-like shape
@@ -718,19 +746,30 @@ function startGame()
     
     -- Start world
     gameWorld:start()
+    
+    -- Verify game is running correctly
+    print("Game started. World active: " .. tostring(gameWorld.active))
+    print("Game state: " .. (_G.gameStateForDrawing or "nil"))
 end
 
 function gameOver()
     gameWorld:stop()
     pipeSpawnSystem:stopSpawning()
+    
+    -- Ensure game state is updated
+    _G.gameStateForDrawing = "gameOver"
+    print("Game over called, stopping world and spawning")
 end
 
 -- ==========================================
 -- Playdate Game Loop
 -- ==========================================
 function playdate.update()
-    -- Clear the screen at the beginning of each frame
+    -- Start with fully clearing the screen
     gfx.clear(gfx.kColorWhite)
+    
+    -- Force complete sprite system refresh
+    gfx.sprite.redrawBackground()
     
     -- Wrap game updates in pcall to catch errors
     local success, errorMsg = pcall(function()
@@ -743,6 +782,9 @@ function playdate.update()
         -- Update timers
         playdate.timer.updateTimers()
     end)
+    
+    -- Clear everything again to ensure no stale graphics
+    gfx.clear(gfx.kColorWhite)
     
     -- Draw a black border to ensure something is visible
     gfx.setColor(gfx.kColorBlack)
@@ -764,10 +806,22 @@ function playdate.update()
         end
     end
     
-    -- Draw game elements directly
-    drawPipes()  -- Draw pipes first (behind bird)
-    drawBird()   -- Draw bird next
-    drawUI()     -- Draw UI on top
+    -- Only draw game elements if we have valid data
+    if _G.gameStateForDrawing == "playing" then
+        -- Only draw pipes if we have actual pipe data
+        if _G.pipesForDrawing and next(_G.pipesForDrawing) ~= nil then
+            drawPipes()  -- Draw pipes first (behind bird)
+        else
+            -- No pipes are active
+            gfx.drawText("No pipes active", 280, 5)
+        end
+        
+        -- Draw the bird
+        drawBird()
+    end
+    
+    -- Always draw the UI
+    drawUI()
     
     -- If we hit an error, show it on screen
     if not success then
