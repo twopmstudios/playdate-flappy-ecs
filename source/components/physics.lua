@@ -7,7 +7,12 @@ function PhysicsComponent:init(actor, gravity, width, height)
     self.width = width or 16
     self.height = height or 16
     self.isColliding = false
-
+    
+    -- Friction properties
+    self.groundFriction = 0.85  -- Higher value = more friction on ground
+    self.airFriction = 0.97     -- Higher value = less friction in air
+    self.isOnGround = false     -- Track if entity is on ground
+    
     -- Collision properties
     self.collisionRect = { x = 0, y = 0, width = self.width, height = self.height }
 
@@ -28,6 +33,22 @@ end
 function PhysicsComponent:setVelocity(x, y)
     self.velocity.x = x
     self.velocity.y = y
+end
+
+function PhysicsComponent:applyFriction()
+    -- Apply different friction based on whether the entity is on ground or in air
+    if self.isOnGround then
+        -- Apply ground friction (higher)
+        self.velocity.x = self.velocity.x * self.groundFriction
+    else
+        -- Apply air friction (lower)
+        self.velocity.x = self.velocity.x * self.airFriction
+    end
+    
+    -- Prevent tiny movements by zeroing out very small velocities
+    if math.abs(self.velocity.x) < 0.01 then
+        self.velocity.x = 0
+    end
 end
 
 function PhysicsComponent:moveWithCollision(platforms, walls)

@@ -426,13 +426,19 @@ function PlayerControlSystem:update()
         else
             -- Regular horizontal movement
             if player.isGrounded then
-                physics:setVelocity(moveInput * player.moveSpeed, physics.velocity.y)
+                if moveInput ~= 0 then
+                    -- Only override velocity with direct control when actively moving
+                    physics:setVelocity(moveInput * player.moveSpeed, physics.velocity.y)
+                end
+                -- When no input, let friction handle deceleration
             else
                 -- Air control is slightly less responsive
                 if player.isAgainstWall and moveInput == player.wallDirection then
                     -- Don't push into the wall
                     physics:setVelocity(0, physics.velocity.y)
                 else
+                    -- Apply force in air rather than setting velocity directly
+                    -- This allows for smoother deceleration with air friction
                     physics:setVelocity(
                         physics.velocity.x + moveInput * (player.moveSpeed * 0.3),
                         physics.velocity.y
@@ -516,6 +522,9 @@ function PhysicsSystem:update()
         local transform = actor:getComponent(TransformComponent)
 
         if physics and transform then
+            -- Apply friction to X velocity based on ground/air state
+            physics:applyFriction()
+            
             -- Apply gravity
             physics.velocity.y = physics.velocity.y + physics.gravity
 
@@ -523,10 +532,7 @@ function PhysicsSystem:update()
             if math.abs(physics.velocity.y) < 0.01 then
                 physics.velocity.y = 0
             end
-            if math.abs(physics.velocity.x) < 0.01 then
-                physics.velocity.x = 0
-            end
-
+            
             -- Update position
             transform:setPosition(transform.x + physics.velocity.x, transform.y + physics.velocity.y)
         end
@@ -558,6 +564,7 @@ function CollisionSystem:update()
 
         -- Reset collision flags
         player.isGrounded = false
+        physics.isOnGround = false
         player.isAgainstWall = false
         player.wallDirection = 0
 
@@ -578,6 +585,7 @@ function CollisionSystem:update()
         if collided then
             if normalY == -1 then -- Hit something from below (ground)
                 player.isGrounded = true
+                physics.isOnGround = true
 
                 -- Don't completely zero vertical velocity, reduce it significantly
                 physics.velocity.y = physics.velocity.y * 0.1
@@ -598,7 +606,13 @@ function CollisionSystem:update()
                     physics.velocity.x = physics.velocity.x * 0.2
                 end
             end
+        else
+            -- If not collided, we're not on ground
+            physics.isOnGround = false
         end
+        
+        -- Apply friction to player movement
+        physics:applyFriction()
 
         ::continuePlayer::
     end

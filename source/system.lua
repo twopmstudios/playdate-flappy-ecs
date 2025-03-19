@@ -19,4 +19,6 @@ function System:dependsOn(system)
     return self -- Allow chaining
 end
 
-function System:update() end
+function System:update() 
+    -- Base system update method (override in derived classes)
+end
