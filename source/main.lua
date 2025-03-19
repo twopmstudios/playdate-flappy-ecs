@@ -52,6 +52,7 @@ function PlayerComponent:init(actor)
     self.isAgainstWall = false
     self.wallDirection = 0 -- -1 for left, 1 for right
     self.wallSlideSpeed = 1.2
+    self.wallFrictionMultiplier = 0.7 -- Friction when pushing into wall
     self.wallJumpVelocityX = 5
     self.canClimb = true
     self.climbSpeed = 2
@@ -179,6 +180,9 @@ function PlayerComponent:startDash(dirX, dirY)
                 physics.velocity.x * 0.3,
                 physics.velocity.y * 0.3
             )
+            
+            -- Update collision rect immediately to prevent visual inconsistency
+            physics:updateCollisionRect()
 
             -- Create cooldown timer
             if self.dashCooldownTimer then
@@ -448,7 +452,7 @@ function PlayerControlSystem:update()
                 end
             end
 
-            -- Wall slide
+            -- Wall slide - only apply for falling, not when moving upward
             if player.isAgainstWall and not player.isGrounded and physics.velocity.y > 0 then
                 physics:setVelocity(physics.velocity.x, player.wallSlideSpeed)
             end
@@ -597,13 +601,41 @@ function CollisionSystem:update()
 
                 -- Reset dash ability when landing
                 player.canDash = true
+            elseif normalY == 1 then -- Hit ceiling
+                -- Zero out upward velocity when hitting ceiling
+                if physics.velocity.y < 0 then
+                    physics.velocity.y = 0
+                end
             elseif normalX ~= 0 then -- Hit a wall
                 player.isAgainstWall = true
                 player.wallDirection = normalX
 
-                -- Allow slight sliding down wall
-                if not player.isClimbing then
-                    physics.velocity.x = physics.velocity.x * 0.2
+                -- Apply wall friction based on player input
+                if player.isClimbing then
+                    -- When climbing, no sliding
+                    physics.velocity.y = 0
+                else
+                    -- If falling, apply wall friction. Don't affect upward momentum
+                    if physics.velocity.y > 0 then
+                        -- Check if player is pushing into the wall
+                        local moveInput = 0
+                        if playdate.buttonIsPressed(playdate.kButtonLeft) then
+                            moveInput = -1
+                        elseif playdate.buttonIsPressed(playdate.kButtonRight) then
+                            moveInput = 1
+                        end
+                        
+                        -- If pushing into wall, apply more friction (reduce gravity effect) only when falling
+                        if moveInput == normalX then
+                            -- Strong wall friction when pushing into it while falling
+                            physics.velocity.y = physics.velocity.y * player.wallFrictionMultiplier
+                        else
+                            -- Normal wall sliding when falling
+                            physics.velocity.y = player.wallSlideSpeed
+                        end
+                    end
+                    -- Don't modify upward velocity when hitting a wall horizontally
+                    -- This allows the player to maintain their jump momentum
                 end
             end
         else

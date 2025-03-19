@@ -76,8 +76,20 @@ function PhysicsComponent:moveWithCollision(platforms, walls)
             xCollider = platform
             xColliderType = "platform"
             xNormal = (self.velocity.x > 0) and -1 or 1
-            -- Move back to original X position
-            transform:setPosition(originalX, originalY)
+            -- Calculate how far we need to move back to be just touching the platform
+            local platformRect = self:getEntityCollisionRect(platform)
+            local adjustment = 0
+            
+            if self.velocity.x > 0 then
+                -- Moving right, adjust to be at left edge of platform
+                adjustment = platformRect.x - (self.collisionRect.x + self.collisionRect.width)
+            else
+                -- Moving left, adjust to be at right edge of platform
+                adjustment = (platformRect.x + platformRect.width) - self.collisionRect.x
+            end
+            
+            -- Move back to adjusted position that's exactly at the edge
+            transform:setPosition(transform.x + adjustment, originalY)
             break
         end
     end
@@ -89,8 +101,20 @@ function PhysicsComponent:moveWithCollision(platforms, walls)
                 xCollider = wall
                 xColliderType = "wall"
                 xNormal = (self.velocity.x > 0) and -1 or 1
-                -- Move back to original X position
-                transform:setPosition(originalX, originalY)
+                -- Calculate how far we need to move back to be just touching the wall
+                local wallRect = self:getEntityCollisionRect(wall)
+                local adjustment = 0
+                
+                if self.velocity.x > 0 then
+                    -- Moving right, adjust to be at left edge of wall
+                    adjustment = wallRect.x - (self.collisionRect.x + self.collisionRect.width)
+                else
+                    -- Moving left, adjust to be at right edge of wall
+                    adjustment = (wallRect.x + wallRect.width) - self.collisionRect.x
+                end
+                
+                -- Move back to adjusted position that's exactly at the edge
+                transform:setPosition(transform.x + adjustment, originalY)
                 break
             end
         end
@@ -113,8 +137,20 @@ function PhysicsComponent:moveWithCollision(platforms, walls)
             yCollider = platform
             yColliderType = "platform"
             yNormal = (self.velocity.y > 0) and -1 or 1
-            -- Move back to safe Y position
-            transform:setPosition(currentX, originalY)
+            -- Calculate how far we need to move back to be just touching the platform
+            local platformRect = self:getEntityCollisionRect(platform)
+            local adjustment = 0
+            
+            if self.velocity.y > 0 then
+                -- Moving down, adjust to be at top edge of platform
+                adjustment = platformRect.y - (self.collisionRect.y + self.collisionRect.height)
+            else
+                -- Moving up, adjust to be at bottom edge of platform
+                adjustment = (platformRect.y + platformRect.height) - self.collisionRect.y
+            end
+            
+            -- Move back to adjusted position that's exactly at the edge
+            transform:setPosition(currentX, transform.y + adjustment)
             break
         end
     end
@@ -126,8 +162,20 @@ function PhysicsComponent:moveWithCollision(platforms, walls)
                 yCollider = wall
                 yColliderType = "wall"
                 yNormal = (self.velocity.y > 0) and -1 or 1
-                -- Move back to safe Y position
-                transform:setPosition(currentX, originalY)
+                -- Calculate how far we need to move back to be just touching the wall
+                local wallRect = self:getEntityCollisionRect(wall)
+                local adjustment = 0
+                
+                if self.velocity.y > 0 then
+                    -- Moving down, adjust to be at top edge of wall
+                    adjustment = wallRect.y - (self.collisionRect.y + self.collisionRect.height)
+                else
+                    -- Moving up, adjust to be at bottom edge of wall
+                    adjustment = (wallRect.y + wallRect.height) - self.collisionRect.y
+                end
+                
+                -- Move back to adjusted position that's exactly at the edge
+                transform:setPosition(currentX, transform.y + adjustment)
                 break
             end
         end
@@ -143,7 +191,7 @@ function PhysicsComponent:moveWithCollision(platforms, walls)
     return collided, collider, normalX, normalY, colliderType
 end
 
-function PhysicsComponent:checkCollisionWithEntity(entity)
+function PhysicsComponent:getEntityCollisionRect(entity)
     -- Get necessary components from the target entity
     local entityTransform = entity:getComponent(TransformComponent)
     local entityWidth, entityHeight
@@ -157,17 +205,23 @@ function PhysicsComponent:checkCollisionWithEntity(entity)
         entityWidth = wallComponent.width
         entityHeight = wallComponent.height
     else
-        return false
+        return nil
     end
 
-    -- Calculate entity collision rect
-    local entityRect = {
+    -- Calculate and return entity collision rect
+    return {
         x = entityTransform.x - entityWidth / 2,
         y = entityTransform.y - entityHeight / 2,
         width = entityWidth,
         height = entityHeight
     }
+end
 
+function PhysicsComponent:checkCollisionWithEntity(entity)
+    -- Get entity collision rect
+    local entityRect = self:getEntityCollisionRect(entity)
+    if not entityRect then return false end
+    
     -- Check for AABB collision
     return self:rectsIntersect(self.collisionRect, entityRect)
 end
