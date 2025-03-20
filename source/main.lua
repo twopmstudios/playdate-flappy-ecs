@@ -603,10 +603,22 @@ function GameStateSystem:update()
             -- Save current canvas and exit graffiti mode
             local canvasActors = self.world:getActorsWithComponent(CanvasComponent)
             if #canvasActors > 0 then
-                EventSystem.emit("saveGraffiti", canvasActors[1]:getComponent(CanvasComponent).canvasImage)
+                local canvas = canvasActors[1]:getComponent(CanvasComponent)
+                if canvas and canvas.canvasImage then
+                    -- Save the graffiti to the billboard first
+                    EventSystem.emit("saveGraffiti", canvas.canvasImage)
+                    -- Then exit graffiti mode after a short delay to ensure the saving completes
+                    playdate.timer.performAfterDelay(50, function()
+                        EventSystem.emit("exitGraffitiMode")
+                    end)
+                else
+                    -- If no canvas, just exit
+                    EventSystem.emit("exitGraffitiMode")
+                end
+            else
+                -- If no canvas actors, just exit
+                EventSystem.emit("exitGraffitiMode")
             end
-            
-            EventSystem.emit("exitGraffitiMode")
         end
     end
 end
@@ -623,10 +635,63 @@ function GameStateSystem:enterGraffitiMode(billboardActor, playerX, playerY)
     gameState.activeBillboard = billboardActor
     gameState.playerPosition = {x = playerX, y = playerY}
     
+    -- Hide platformer elements by moving them offscreen
+    self:togglePlatformerVisibility(false)
+    
     -- Setup spray painting game
     setupSprayPaintingGame(self.world)
     
+    -- Reset camera draw offset to show only the graffiti canvas
+    playdate.graphics.setDrawOffset(0, 0)
+    
     print("Entered graffiti mode")
+end
+
+function GameStateSystem:togglePlatformerVisibility(visible)
+    -- Hide or show platformer elements
+    local platforms = self.world:getActorsWithComponent(PlatformComponent)
+    local players = self.world:getActorsWithComponent(PlayerComponent)
+    local walls = self.world:getActorsWithComponent(WallComponent)
+    local billboards = self.world:getActorsWithComponent(BillboardComponent)
+    
+    -- Get all platformer UI
+    local platformerUI = {}
+    for _, actor in ipairs(self.world.actors) do
+        if actor:hasComponent(UISystem) then
+            table.insert(platformerUI, actor)
+        end
+    end
+    
+    local zValue = visible and 10 or -5000  -- Move offscreen when not visible
+    
+    -- Set visibility for platforms
+    for _, actor in ipairs(platforms) do
+        actor:setZIndex(visible and 10 or -5000)
+        actor:setVisible(visible)
+    end
+    
+    -- Set visibility for walls
+    for _, actor in ipairs(walls) do
+        actor:setZIndex(visible and 10 or -5000)
+        actor:setVisible(visible)
+    end
+    
+    -- Set visibility for player
+    for _, actor in ipairs(players) do
+        actor:setZIndex(visible and 100 or -5000)
+        actor:setVisible(visible)
+    end
+    
+    -- Set visibility for billboards
+    for _, actor in ipairs(billboards) do
+        actor:setZIndex(visible and 5 or -5000)
+        actor:setVisible(visible)
+    end
+    
+    -- Set visibility for platformer UI (if any)
+    for _, actor in ipairs(platformerUI) do
+        actor:setVisible(visible)
+    end
 end
 
 function GameStateSystem:exitGraffitiMode()
@@ -651,8 +716,21 @@ function GameStateSystem:exitGraffitiMode()
         self.world:removeActor(actor)
     end
     
+    -- Show platformer elements again
+    self:togglePlatformerVisibility(true)
+    
     -- Restore platformer mode
     gameState.currentState = "platformer"
+    
+    -- Find the camera component to restore proper camera view
+    local cameras = self.world:getActorsWithComponent(CameraComponent)
+    if #cameras > 0 then
+        local camera = cameras[1]:getComponent(CameraComponent)
+        if camera then
+            -- Force update to restore camera position
+            camera:update()
+        end
+    end
     
     print("Exited graffiti mode")
 end
