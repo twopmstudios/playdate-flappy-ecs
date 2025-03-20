@@ -41,12 +41,16 @@ function PlayerComponent:init(actor)
     self.isClimbing = false
 
     -- Dash properties
-    self.dashSpeed = 12
-    self.dashDuration = 100 -- milliseconds
+    self.dashSpeed = 14       -- Faster dash speed
+    self.dashDuration = 150   -- Longer duration
     self.dashTimer = nil
     self.dashDirection = { x = 0, y = 0 }
-    self.dashCooldown = 350 -- milliseconds
+    self.dashCooldown = 250   -- Shorter cooldown for more frequent dashes
     self.dashCooldownTimer = nil
+    self.dashRefreshedByGround = true     -- Track if dash can be refreshed by touching ground
+    self.hasDashed = false                -- Track if player has dashed mid-air
+    self.dashEndLagDuration = 40          -- Short end lag after dashing before full control resumes
+    self.dashEndLagTimer = nil
 
     -- Wall climbing properties
     self.isAgainstWall = false
@@ -144,9 +148,29 @@ function PlayerComponent:update()
 end
 
 function PlayerComponent:startDash(dirX, dirY)
-    if self.canDash and not self.isDashing then
+    -- Check if can dash
+    if (self.canDash or (self.isAgainstWall and not self.hasDashed)) and not self.isDashing then
         self.isDashing = true
         self.canDash = false
+        
+        if not self.isGrounded and not self.isAgainstWall then
+            -- If in mid-air and not against a wall, mark that we've used our air dash
+            self.hasDashed = true
+        end
+        
+        -- Cancel any end lag
+        if self.dashEndLagTimer then
+            self.dashEndLagTimer:remove()
+            self.dashEndLagTimer = nil
+        end
+
+        -- Ensure we have valid direction values
+        if dirX == nil or dirY == nil then
+            -- Default to facing direction
+            dirX = self.facingDirection
+            dirY = 0
+            print("Corrected nil direction to: " .. dirX .. ", " .. dirY)
+        end
 
         -- Normalize direction
         local length = math.sqrt(dirX * dirX + dirY * dirY)
@@ -154,14 +178,18 @@ function PlayerComponent:startDash(dirX, dirY)
             dirX = dirX / length
             dirY = dirY / length
         else
+            -- If for some reason we get a zero vector, force to facing direction
             dirX = self.facingDirection
             dirY = 0
+            print("Corrected zero vector to: " .. dirX .. ", " .. dirY)
         end
 
         self.dashDirection = { x = dirX, y = dirY }
 
         -- Apply dash velocity
         local physics = self.actor:getComponent(PhysicsComponent)
+        
+        -- Completely override velocity for a more responsive dash
         physics:setVelocity(
             self.dashDirection.x * self.dashSpeed,
             self.dashDirection.y * self.dashSpeed
@@ -174,15 +202,28 @@ function PlayerComponent:startDash(dirX, dirY)
 
         self.dashTimer = playdate.timer.new(self.dashDuration, function()
             self.isDashing = false
-
-            -- Reset velocity after dash
+            
+            -- Apply dash end effects - preserve some momentum in the dash direction
+            local preserveMomentum = 0.5  -- Preserve half of dash velocity
+            
+            -- If dashing horizontally or diagonally upward, provide a small upward boost at the end
+            local upwardBoost = 0
+            if self.dashDirection.y <= 0 and math.abs(self.dashDirection.x) > 0 then
+                upwardBoost = -2  -- Small upward boost to help with platforming
+            end
+            
             physics:setVelocity(
-                physics.velocity.x * 0.3,
-                physics.velocity.y * 0.3
+                self.dashDirection.x * self.dashSpeed * preserveMomentum,
+                (self.dashDirection.y * self.dashSpeed * preserveMomentum) + upwardBoost
             )
             
             -- Update collision rect immediately to prevent visual inconsistency
             physics:updateCollisionRect()
+            
+            -- Create a brief period of dash end lag where control is limited
+            self.dashEndLagTimer = playdate.timer.new(self.dashEndLagDuration, function()
+                self.dashEndLagTimer = nil
+            end)
 
             -- Create cooldown timer
             if self.dashCooldownTimer then
@@ -190,13 +231,29 @@ function PlayerComponent:startDash(dirX, dirY)
             end
 
             self.dashCooldownTimer = playdate.timer.new(self.dashCooldown, function()
-                -- Allow dashing again after cooldown
-                self.canDash = true
+                -- Allow dashing again after cooldown, but only if we have our dash refreshed
+                if self.dashRefreshedByGround then
+                    self.canDash = true
+                end
             end)
         end)
 
-        -- Emit dash effect event
-        EventSystem.emit("playerDash", self.actor.id, dirX, dirY)
+        -- Ensure we have valid direction values before emitting effects
+        local dashDirX = self.dashDirection.x or 0
+        local dashDirY = self.dashDirection.y or 0
+        
+        -- Emit dash effect event with higher intensity
+        -- Generate more particles for a more satisfying effect
+        for i = 1, 3 do -- Call event multiple times for more particles
+            EventSystem.emit("playerDash", self.actor.id, dashDirX, dashDirY)
+        end
+        
+        -- Add screen shake for juice
+        -- This would normally be part of a camera system, but for simplicity
+        -- we can just add a visual cue that the dash is powerful
+        local shakeAmount = 2  -- Use integers for shake amount to avoid math.random errors
+        local shakeDuration = 100
+        EventSystem.emit("screenShake", shakeAmount, shakeDuration)
     end
 end
 
@@ -334,6 +391,34 @@ function CameraComponent:init(actor, targetActorId, offsetY)
 
     -- Initialize camera position to show content immediately
     self.currentScroll = 150
+    
+    -- Screen shake properties
+    self.shakeAmount = 0
+    self.shakeTimer = nil
+    self.shakeOffsetX = 0
+    self.shakeOffsetY = 0
+    
+    -- Subscribe to screen shake events
+    EventSystem.subscribe("screenShake", function(amount, duration)
+        self:startShake(amount, duration)
+    end)
+end
+
+function CameraComponent:startShake(amount, duration)
+    self.shakeAmount = amount
+    
+    -- Clear existing shake timer if there is one
+    if self.shakeTimer then
+        self.shakeTimer:remove()
+    end
+    
+    -- Set up timer to stop shake after duration
+    self.shakeTimer = playdate.timer.new(duration, function()
+        self.shakeAmount = 0
+        self.shakeOffsetX = 0
+        self.shakeOffsetY = 0
+        self.shakeTimer = nil
+    end)
 end
 
 function CameraComponent:update()
@@ -351,9 +436,26 @@ function CameraComponent:update()
 
     -- Smooth camera following
     self.currentScroll = self.currentScroll + (desiredY - self.currentScroll) * self.smoothSpeed
+    
+    -- Update screen shake if active
+    if self.shakeAmount > 0 then
+        -- Make sure shake amount is an integer to avoid errors
+        local intShakeAmount = math.floor(self.shakeAmount)
+        if intShakeAmount < 1 then intShakeAmount = 1 end
+        
+        -- Generate random offsets for shake
+        self.shakeOffsetX = math.random(-intShakeAmount, intShakeAmount)
+        self.shakeOffsetY = math.random(-intShakeAmount, intShakeAmount)
+    else
+        self.shakeOffsetX = 0
+        self.shakeOffsetY = 0
+    end
 
-    -- Apply camera offset
-    playdate.graphics.setDrawOffset(0, -self.currentScroll + self.screenHeight / 2)
+    -- Apply camera offset with shake
+    playdate.graphics.setDrawOffset(
+        self.shakeOffsetX, 
+        -self.currentScroll + self.screenHeight / 2 + self.shakeOffsetY
+    )
 end
 
 class('WorldReferenceComponent').extends(Component)
@@ -409,9 +511,13 @@ function PlayerControlSystem:update()
         if playdate.buttonIsPressed(playdate.kButtonLeft) then
             moveInput = -1
             player.facingDirection = -1
+            -- Debug output when direction changes
+            print("Facing left (-1)")
         elseif playdate.buttonIsPressed(playdate.kButtonRight) then
             moveInput = 1
             player.facingDirection = 1
+            -- Debug output when direction changes
+            print("Facing right (1)")
         end
 
         -- Climbing movement
@@ -491,20 +597,55 @@ function PlayerControlSystem:update()
             player:stopClimbing()
         end
 
-        -- Dash (using crank for dash direction)
-        if playdate.buttonJustPressed(playdate.kButtonDown) and playdate.buttonIsPressed(playdate.kButtonB) then
-            -- Get dash direction from crank position
-            local crankPos = playdate.getCrankPosition()
-            local dashDirX = math.cos(math.rad(crankPos))
-            local dashDirY = math.sin(math.rad(crankPos))
-
-            -- If crank isn't being used, dash in movement or facing direction
-            if dashDirX == 0 and dashDirY == 0 then
-                dashDirX = moveInput ~= 0 and moveInput or player.facingDirection
-                dashDirY = 0
+        -- Dash - either with Down+B or just B-press if in dash end lag
+        if (playdate.buttonJustPressed(playdate.kButtonDown) and playdate.buttonIsPressed(playdate.kButtonB)) or 
+           (playdate.buttonJustPressed(playdate.kButtonB) and not player.isClimbing) then
+            
+            -- Only process dash input if not in dash end lag
+            if not player.dashEndLagTimer then
+                -- Get dash direction options
+                local dashDirX = 0
+                local dashDirY = 0
+                
+                -- Try to get direction from d-pad first
+                if playdate.buttonIsPressed(playdate.kButtonUp) and not playdate.buttonIsPressed(playdate.kButtonDown) then
+                    dashDirY = -1
+                elseif playdate.buttonIsPressed(playdate.kButtonDown) and not playdate.buttonIsPressed(playdate.kButtonUp) then
+                    dashDirY = 1
+                end
+                
+                if playdate.buttonIsPressed(playdate.kButtonLeft) and not playdate.buttonIsPressed(playdate.kButtonRight) then
+                    dashDirX = -1
+                elseif playdate.buttonIsPressed(playdate.kButtonRight) and not playdate.buttonIsPressed(playdate.kButtonLeft) then
+                    dashDirX = 1
+                end
+                
+                -- If no direction from d-pad, check crank
+                if dashDirX == 0 and dashDirY == 0 then
+                    -- Get dash direction from crank position only if crank has been turned
+                    local crankPos = playdate.getCrankPosition()
+                    local crankChange = playdate.getCrankChange()
+                    
+                    -- Only use crank if it has been moved recently (indicating intentional use)
+                    if math.abs(crankChange) > 0.1 then
+                        dashDirX = math.cos(math.rad(crankPos))
+                        dashDirY = math.sin(math.rad(crankPos))
+                        print("Using crank for dash direction: " .. dashDirX .. ", " .. dashDirY)
+                    end
+                end
+                
+                -- If still no direction, use the player's facing direction
+                if dashDirX == 0 and dashDirY == 0 then
+                    -- Always use player's facing direction as a reliable default
+                    dashDirX = player.facingDirection
+                    dashDirY = 0
+                    
+                    -- Debug output to verify dash direction
+                    print("Default dash direction: " .. dashDirX .. ", " .. dashDirY)
+                end
+                
+                player:startDash(dashDirX, dashDirY)
             end
-
-            player:startDash(dashDirX, dashDirY)
         end
 
         ::continue::
@@ -601,6 +742,8 @@ function CollisionSystem:update()
 
                 -- Reset dash ability when landing
                 player.canDash = true
+                player.hasDashed = false     -- Reset air dash flag
+                player.dashRefreshedByGround = true
             elseif normalY == 1 then -- Hit ceiling
                 -- Zero out upward velocity when hitting ceiling
                 if physics.velocity.y < 0 then
@@ -783,37 +926,105 @@ function ParticleSystem:createDashParticles(actorId, dirX, dirY)
     local transform = actor:getComponent(TransformComponent)
     if not transform then return end
 
-    -- Create a trail of particles
-    local particleCount = 10
-
+    -- Create more particles for a more impactful dash effect
+    local particleCount = 15
+    
+    -- Create a more varied trail of particles
     for _ = 1, particleCount do
         local particleActor = Actor()
 
-        -- Create small particle that fades away
-        local particleSize = math.random(3, 6)
+        -- Create particles with varied shapes and sizes
+        local particleType = math.random(1, 3)
+        local particleSize = math.random(2, 6)
         local particleImage = gfx.image.new(particleSize, particleSize)
+        
         gfx.pushContext(particleImage)
         gfx.setColor(gfx.kColorWhite)
-        gfx.fillRect(0, 0, particleSize, particleSize)
+        
+        -- Different particle shapes for variety
+        if particleType == 1 then
+            -- Square
+            gfx.fillRect(0, 0, particleSize, particleSize)
+        elseif particleType == 2 then
+            -- Circle
+            gfx.fillCircleAtPoint(particleSize/2, particleSize/2, particleSize/2)
+        else
+            -- Diamond
+            gfx.fillTriangle(
+                particleSize/2, 0,
+                particleSize, particleSize/2,
+                particleSize/2, particleSize)
+            gfx.fillTriangle(
+                particleSize/2, 0,
+                0, particleSize/2,
+                particleSize/2, particleSize)
+        end
+        
         gfx.popContext()
 
         particleActor:setImage(particleImage)
         particleActor:setZIndex(90)
 
-        -- Position slightly offset from player
-        local offsetX = math.random(-5, 5)
-        local offsetY = math.random(-5, 5)
+        -- Ensure we have valid direction values
+        local safeDirX = dirX or 0
+        local safeDirY = dirY or 0
+        
+        -- More spread out particles along the dash path
+        local perpX = -(safeDirY) -- Perpendicular to dash direction
+        local perpY = safeDirX
+        
+        -- Position particles along and around the dash path
+        local mainOffset = math.random(-10, 10)
+        local perpOffset = math.random(-8, 8)
+        local offsetX = (mainOffset * safeDirX) + (perpOffset * perpX)
+        local offsetY = (mainOffset * safeDirY) + (perpOffset * perpY)
 
-        -- Velocity opposite of dash direction
-        local vx = -dirX * math.random(0.5, 1.5)
-        local vy = -dirY * math.random(0.5, 1.5)
+        -- Velocity with more variation and opposing the dash direction for a trail effect
+        local speedVariation = math.random(80, 150) / 100
+        -- For random floats in range, use math.random() * range + min
+        local vx = -safeDirX * speedVariation + (math.random() - 0.5) -- Random value between -0.5 and 0.5
+        local vy = -safeDirY * speedVariation + (math.random() - 0.5) -- Random value between -0.5 and 0.5
+
+        -- Shorter but more varied lifetimes
+        local lifetime = math.random(200, 400) -- These should be integers
 
         particleActor:addComponent(TransformComponent, transform.x + offsetX, transform.y + offsetY)
-        -- particleActor:addComponent(PhysicsComponent, 0.05, particleSize, particleSize)
-        particleActor:addComponent(ParticleComponent, 300, vx, vy)
+        particleActor:addComponent(ParticleComponent, lifetime, vx, vy)
 
         self.world:addActor(particleActor)
     end
+    
+    -- Add a "dash line" effect in the direction of the dash
+    local dashLineActor = Actor()
+    local lineLength = 16
+    local lineWidth = 4
+    
+    -- Calculate line start and end points based on dash direction
+    local safeDirX = dirX or 0
+    local safeDirY = dirY or 0
+    
+    local startX = transform.x
+    local startY = transform.y
+    local endX = startX + (safeDirX * lineLength)
+    local endY = startY + (safeDirY * lineLength)
+    
+    -- Create a line image
+    local angle = math.atan2(safeDirY, safeDirX)
+    local lineImage = gfx.image.new(lineLength + lineWidth, lineWidth * 2)
+    
+    gfx.pushContext(lineImage)
+    gfx.setColor(gfx.kColorWhite)
+    gfx.fillRect(0, lineWidth/2, lineLength, lineWidth)
+    gfx.popContext()
+    
+    dashLineActor:setImage(lineImage)
+    dashLineActor:setZIndex(95)
+    dashLineActor:setRotation(math.deg(angle))
+    
+    dashLineActor:addComponent(TransformComponent, (startX + endX) / 2, (startY + endY) / 2)
+    dashLineActor:addComponent(ParticleComponent, 100, 0, 0) -- Short lifetime for the line effect
+    
+    self.world:addActor(dashLineActor)
 end
 
 function ParticleSystem:update()
@@ -840,13 +1051,14 @@ function UISystem:init(world)
     -- Add a semi-transparent background
     gfx.setColor(gfx.kColorBlack)
     gfx.setDitherPattern(0.7)
-    gfx.fillRect(50, 175, 300, 60)
+    gfx.fillRect(50, 165, 300, 70)
     gfx.setDitherPattern(0)
     -- Draw text
     gfx.setColor(gfx.kColorWhite)
-    gfx.drawTextAligned("CONTROLS:", 200, 180, kTextAlignment.center)
-    gfx.drawTextAligned("D-Pad: Move   A: Jump   B: Climb", 200, 200, kTextAlignment.center)
-    gfx.drawTextAligned("Down+B: Dash (use crank to aim)", 200, 220, kTextAlignment.center)
+    gfx.drawTextAligned("CONTROLS:", 200, 170, kTextAlignment.center)
+    gfx.drawTextAligned("D-Pad: Move   A: Jump   B: Climb", 200, 190, kTextAlignment.center)
+    gfx.drawTextAligned("B: Dash (use D-pad to aim)", 200, 210, kTextAlignment.center)
+    gfx.drawTextAligned("Air dash resets when landing or on walls", 200, 230, kTextAlignment.center)
     gfx.popContext()
 
     uiActor:setImage(uiImage)
