@@ -17,13 +17,10 @@ import "components/transform"
 import "components/physics"
 import "system"
 
-
--- Add extra imports for sound if we decide to use it later
--- import "CoreLibs/sound"
-
 -- Engine Constants
 local gfx <const> = playdate.graphics
 local geom <const> = playdate.geometry
+local snd <const> = playdate.sound
 -- Spray Painting Game using the provided ECS architecture
 
 -- Import necessary libraries (assuming these are already imported in main.lua)
@@ -148,6 +145,31 @@ function SpraySystem:init(world)
     self.lastX = 0
     self.lastY = 0
 
+    local main_channel = snd.channel.new()
+    local spraycan_instrument = snd.instrument.new()
+
+    -- Create a synthesized spray sound
+    self.spraySound = snd.synth.new(snd.kWaveSawtooth)
+    self.spraySound:setADSR(0.01, 0.1, 0.2, 0.5)
+    -- Apply lowpass filter to soften harsh frequencies
+    self.sprayFilter = snd.twopolefilter.new(snd.kFilterLowPass)
+    self.sprayFilter:setFrequency(1200)
+    self.sprayFilter:setResonance(0.1)
+
+    -- Add noise for more realistic spray sound
+    self.noiseSound = snd.synth.new(snd.kWaveNoise)
+    self.noiseSound:setADSR(0.01, 0.1, 0.5, 0.3)
+    self.noiseSound:setVolume(0.3)
+    -- Apply bandpass filter to remove harsh highs and rumbling lows
+    self.noiseFilter = snd.twopolefilter.new(snd.kFilterBandPass)
+    self.noiseFilter:setFrequency(800)
+    self.noiseFilter:setResonance(0.5)
+
+    spraycan_instrument:addVoice(self.spraySound)
+    spraycan_instrument:addVoice(self.noiseSound)
+    main_channel:addSource(self.noiseSound)
+    main_channel:addEffect(self.sprayFilter)
+
     -- Subscribe to clear canvas event
     EventSystem.subscribe("clearCanvas", function()
         local canvasActors = self.world:getActorsWithComponent(CanvasComponent)
@@ -170,7 +192,27 @@ function SpraySystem:update()
 
         -- Check if A button is pressed (to spray)
         if playdate.buttonIsPressed(playdate.kButtonA) and sprayCan.pressure > 0 then
+            -- Apply spray paint
             self:applySpray(canvas, transform.x, transform.y, sprayCan)
+
+            -- Play spray sound effects with modifications based on pressure
+            if not self.isSprayActive then
+                -- Start the sounds
+                self.spraySound:playNote(500 - sprayCan.pressure * 400)
+                self.noiseSound:playNote(240 - sprayCan.pressure * 20)
+                self.isSprayActive = true
+            end
+
+            -- Modulate sound based on pressure
+            self.spraySound:setVolume(0.1 + sprayCan.pressure * 0.3)
+            self.noiseSound:setVolume(0.3 + sprayCan.pressure * 0.4)
+        else
+            -- Stop spray sounds when not spraying
+            if self.isSprayActive then
+                self.spraySound:stop()
+                self.noiseSound:stop()
+                self.isSprayActive = false
+            end
         end
 
         -- Store last position for interpolation
