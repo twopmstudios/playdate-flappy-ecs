@@ -151,49 +151,121 @@ function PlayerComponent:createPlayerSprite()
     self.currentFrame = 1
     self.animationDelay = 100 -- milliseconds between frames
     
-    -- Attempt to load sprite sheet
-    local spritePath = "images/wizzo-table-1.png"
+    -- Attempt to load individual animation frames
+    local loadedAnyFrames = false
     
-    -- Try to load sprite sheet manually since we need to slice it
-    local spriteSheetImage = gfx.image.new(spritePath)
-    
-    if spriteSheetImage then
-        print("Successfully loaded sprite sheet image: " .. spritePath)
+    -- Try to load individual frame PNGs for running animation
+    -- Format: frame-1.png, frame-2.png, frame-3.png, frame-4.png
+    for i = 1, 4 do
+        local framePath = "images/frame-" .. i .. ".png"
+        local frameImage = gfx.image.new(framePath)
         
-        -- Get the full sprite sheet dimensions
-        local width, height = spriteSheetImage:getSize()
-        print("Sprite sheet size: " .. width .. "x" .. height)
-        
-        -- Calculate individual frame width (assuming horizontal strip)
-        local frameWidth = 16 -- Each frame is 16x16
-        local frameCount = math.floor(width / frameWidth)
-        print("Detected " .. frameCount .. " frames in sprite sheet")
-        
-        -- Slice the sprite sheet into individual frames
-        for i = 1, frameCount do
-            local frameImage = gfx.image.new(frameWidth, height)
-            gfx.pushContext(frameImage)
-            -- Draw portion of the sprite sheet - offset by (i-1)*frameWidth
-            spriteSheetImage:draw(-(i-1)*frameWidth, 0)
-            gfx.popContext()
+        if frameImage then
+            print("Loaded animation frame: " .. framePath)
             
-            -- Store the frame in appropriate animations
+            -- Add to running animation
+            self.frames.run[i] = frameImage
+            
+            -- For frames we want to use for other states
             if i == 1 then
-                -- First frame is idle
                 self.frames.idle[1] = frameImage
-                -- Also use for stationary states
+            elseif i == 2 then
                 self.frames.jump[1] = frameImage
-                self.frames.wallslide[1] = frameImage
                 self.frames.climb[1] = frameImage
+            elseif i == 3 then
                 self.frames.dash[1] = frameImage
+                self.frames.wallslide[1] = frameImage
+            elseif i == 4 then
                 self.frames.fall[1] = frameImage
             end
             
-            -- All frames go into the run animation
-            self.frames.run[i] = frameImage
+            loadedAnyFrames = true
+        else
+            print("Failed to load animation frame: " .. framePath)
         end
+    end
+    
+    -- Alternatively, try to load from a sprite table if export format changes
+    if not loadedAnyFrames then
+        print("Trying to load from wizzo.png...")
+        -- Load from wizzo.png (just the first 16x16 region)
+        local wizzo = gfx.image.new("wizzo.png")
         
-        print("Animation frames manually sliced from sprite sheet")
+        if wizzo then
+            print("Successfully loaded wizzo.png")
+            
+            -- Extract all 4 frames (16x16 each) from the wizzo sprite sheet
+            for i = 1, 4 do
+                local frame = gfx.image.new(16, 16)
+                gfx.pushContext(frame)
+                gfx.setColor(gfx.kColorWhite)
+                gfx.fillRect(0, 0, 16, 16)  -- Fill with white background
+                gfx.setColor(gfx.kColorBlack)
+                -- Each frame is 16x16 in a 64x16 image
+                -- Simple approach: draw the full image but position it to show only the portion we want
+                local frameX = (i-1) * 16  -- Each frame is 16px wide
+                wizzo:draw(-frameX, 0)  -- Position the image so only the right segment is visible in our 16x16 frame
+                gfx.popContext()
+                
+                -- Add to running animation
+                self.frames.run[i] = frame
+                
+                -- For frames we want to use for other states
+                if i == 1 then
+                    self.frames.idle[1] = frame
+                elseif i == 2 then
+                    self.frames.jump[1] = frame
+                    self.frames.climb[1] = frame
+                elseif i == 3 then
+                    self.frames.dash[1] = frame
+                    self.frames.wallslide[1] = frame
+                elseif i == 4 then
+                    self.frames.fall[1] = frame
+                end
+            end
+            
+            loadedAnyFrames = true
+        else
+            print("Failed to load wizzo.png")
+            
+            -- Try loading from sprite table as another fallback
+            print("Trying to load from sprite table...")
+            local spritePath = "images/wizzo-table-1"
+            local imageTable = gfx.imagetable.new(spritePath)
+            
+            if imageTable then
+                print("Successfully loaded sprite table: " .. spritePath)
+                
+                -- Load frames from the image table
+                for i = 1, 4 do
+                    local frame = imageTable:getImage(i)
+                    if frame then
+                        self.frames.run[i] = frame
+                        
+                        -- For frames we want to use for other states
+                        if i == 1 then
+                            self.frames.idle[1] = frame
+                        elseif i == 2 then
+                            self.frames.jump[1] = frame
+                            self.frames.climb[1] = frame
+                        elseif i == 3 then
+                            self.frames.dash[1] = frame
+                            self.frames.wallslide[1] = frame
+                        elseif i == 4 then
+                            self.frames.fall[1] = frame
+                        end
+                        
+                        loadedAnyFrames = true
+                    end
+                end
+            else
+                print("Failed to load sprite table")
+            end
+        end
+    end
+    
+    if loadedAnyFrames then
+        print("Successfully loaded animation frames from files")
     else
         print("Failed to load sprite sheet - using fallback sprites")
         
