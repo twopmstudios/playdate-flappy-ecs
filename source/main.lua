@@ -129,27 +129,149 @@ function PlayerComponent:init(actor)
     -- Animation state
     self.facingDirection = 1 -- 1 = right, -1 = left
     self.animState = "idle"
+    self.lastAnimTime = 0
+    self.currentFrame = 1
 
     -- Create player image and animations
     self:createPlayerSprite()
 end
 
 function PlayerComponent:createPlayerSprite()
-    -- Create more visible player sprite
-    local playerImage = gfx.image.new(16, 16)
-    gfx.pushContext(playerImage)
-    gfx.setColor(gfx.kColorBlack)
-    gfx.fillRect(0, 0, 16, 16)
-    gfx.setColor(gfx.kColorWhite)
-    gfx.fillRect(2, 2, 12, 12)
-    -- Add a distinguishing mark
-    gfx.setColor(gfx.kColorBlack)
-    gfx.fillRect(4, 4, 8, 8)
-    gfx.popContext()
-
-    self.actor:setImage(playerImage)
+    -- Animation frames for each state
+    self.frames = {
+        idle = {},
+        run = {},
+        jump = {},
+        fall = {},
+        dash = {},
+        wallslide = {},
+        climb = {}
+    }
+    
+    self.currentFrame = 1
+    self.animationDelay = 100 -- milliseconds between frames
+    
+    -- Attempt to load sprite sheet
+    local spritePath = "images/wizzo-table-1.png"
+    
+    -- Try to load sprite sheet manually since we need to slice it
+    local spriteSheetImage = gfx.image.new(spritePath)
+    
+    if spriteSheetImage then
+        print("Successfully loaded sprite sheet image: " .. spritePath)
+        
+        -- Get the full sprite sheet dimensions
+        local width, height = spriteSheetImage:getSize()
+        print("Sprite sheet size: " .. width .. "x" .. height)
+        
+        -- Calculate individual frame width (assuming horizontal strip)
+        local frameWidth = 16 -- Each frame is 16x16
+        local frameCount = math.floor(width / frameWidth)
+        print("Detected " .. frameCount .. " frames in sprite sheet")
+        
+        -- Slice the sprite sheet into individual frames
+        for i = 1, frameCount do
+            local frameImage = gfx.image.new(frameWidth, height)
+            gfx.pushContext(frameImage)
+            -- Draw portion of the sprite sheet - offset by (i-1)*frameWidth
+            spriteSheetImage:draw(-(i-1)*frameWidth, 0)
+            gfx.popContext()
+            
+            -- Store the frame in appropriate animations
+            if i == 1 then
+                -- First frame is idle
+                self.frames.idle[1] = frameImage
+                -- Also use for stationary states
+                self.frames.jump[1] = frameImage
+                self.frames.wallslide[1] = frameImage
+                self.frames.climb[1] = frameImage
+                self.frames.dash[1] = frameImage
+                self.frames.fall[1] = frameImage
+            end
+            
+            -- All frames go into the run animation
+            self.frames.run[i] = frameImage
+        end
+        
+        print("Animation frames manually sliced from sprite sheet")
+    else
+        print("Failed to load sprite sheet - using fallback sprites")
+        
+        -- Create fallback frames for each animation type
+        for animType, _ in pairs(self.frames) do
+            -- Create a different colored shape for each animation type
+            local frameCount = animType == "run" and 4 or 1
+            
+            for i = 1, frameCount do
+                local frameImage = gfx.image.new(16, 16)
+                gfx.pushContext(frameImage)
+                gfx.setColor(gfx.kColorBlack)
+                gfx.fillRect(0, 0, 16, 16)
+                gfx.setColor(gfx.kColorWhite)
+                
+                -- Different shapes for different animation types
+                if animType == "idle" then
+                    gfx.fillCircleAtPoint(8, 8, 6)
+                elseif animType == "run" then
+                    gfx.fillRect(2, 2, 12, 12)
+                    -- Add some variation for running frames
+                    if i == 2 then
+                        gfx.setColor(gfx.kColorBlack)
+                        gfx.fillRect(4, 4, 2, 2)
+                    elseif i == 3 then
+                        gfx.setColor(gfx.kColorBlack)
+                        gfx.fillRect(10, 4, 2, 2)
+                    elseif i == 4 then
+                        gfx.setColor(gfx.kColorBlack)
+                        gfx.fillRect(7, 10, 2, 2)
+                    end
+                elseif animType == "jump" then
+                    gfx.fillTriangle(8, 2, 14, 14, 2, 14)
+                elseif animType == "fall" then
+                    gfx.drawLine(4, 4, 12, 12)
+                    gfx.drawLine(4, 12, 12, 4)
+                elseif animType == "dash" then
+                    gfx.fillRect(2, 6, 12, 4)
+                elseif animType == "wallslide" then
+                    gfx.fillRect(2, 2, 4, 12)
+                elseif animType == "climb" then
+                    gfx.fillRect(4, 2, 8, 12)
+                end
+                
+                gfx.popContext()
+                self.frames[animType][i] = frameImage
+            end
+        end
+    end
+    
+    -- Make sure all animation states have at least one frame
+    for animType, frames in pairs(self.frames) do
+        if #frames == 0 then
+            -- Create a fallback frame for any missing animations
+            local fallbackImage = gfx.image.new(16, 16)
+            gfx.pushContext(fallbackImage)
+            gfx.setColor(gfx.kColorBlack)
+            gfx.fillRect(0, 0, 16, 16)
+            gfx.setColor(gfx.kColorWhite)
+            gfx.fillCircleAtPoint(8, 8, 6)
+            gfx.popContext()
+            
+            self.frames[animType][1] = fallbackImage
+            print("Created fallback frame for " .. animType .. " animation")
+        end
+    end
+    
+    -- Initialize with idle animation
+    self.animState = "idle"
+    self.lastAnimState = "idle"
+    self.lastAnimTime = 0
+    
+    -- Set the first frame
+    self.actor:setImage(self.frames[self.animState][1])
     self.actor:setCollideRect(0, 0, 16, 16)
     self.actor:setZIndex(100) -- Player should be on top
+    
+    print("Player sprite initialized with animations")
 end
 
 function PlayerComponent:update()
@@ -157,6 +279,8 @@ function PlayerComponent:update()
     local physics = self.actor:getComponent(PhysicsComponent)
 
     -- Update animation state
+    local previousState = self.animState
+    
     if self.isDashing then
         self.animState = "dash"
     elseif self.isClimbing then
@@ -175,6 +299,36 @@ function PlayerComponent:update()
         else
             self.animState = "idle"
         end
+    end
+    
+    -- Only reset frame counter if we changed animation state
+    if previousState ~= self.animState then
+        self.currentFrame = 1
+        print("Animation changed from " .. previousState .. " to " .. self.animState)
+        
+        -- Update image immediately on state change
+        if self.frames[self.animState] and self.frames[self.animState][1] then
+            self.actor:setImage(self.frames[self.animState][1])
+        end
+    end
+    
+    -- Update animation frames based on time
+    local currentTime = playdate.getCurrentTimeMilliseconds()
+    if self.lastAnimTime == 0 then 
+        self.lastAnimTime = currentTime
+    end
+    
+    local elapsed = currentTime - self.lastAnimTime
+    if elapsed >= self.animationDelay then
+        self:updateAnimationFrame()
+        self.lastAnimTime = currentTime
+    end
+    
+    -- Set sprite flip based on facing direction
+    if self.facingDirection == -1 then
+        self.actor:setImageFlip(gfx.kImageFlippedX)
+    else
+        self.actor:setImageFlip(gfx.kImageUnflipped)
     end
 
     if self.isGrounded then
@@ -201,6 +355,24 @@ function PlayerComponent:update()
         -- Recover stamina when on ground
         self.currentStamina = math.min(self.climbStamina, self.currentStamina + self.staminaRecoveryRate)
         self.canClimb = true
+    end
+end
+
+function PlayerComponent:updateAnimationFrame()
+    -- Only animations with multiple frames need to be advanced
+    local framesInAnim = self.frames[self.animState]
+    local frameCount = #framesInAnim
+    
+    -- If this animation has multiple frames, advance to the next one
+    if frameCount > 1 then
+        self.currentFrame = self.currentFrame + 1
+        if self.currentFrame > frameCount then
+            self.currentFrame = 1
+        end
+        
+        if framesInAnim[self.currentFrame] then
+            self.actor:setImage(framesInAnim[self.currentFrame])
+        end
     end
 end
 
